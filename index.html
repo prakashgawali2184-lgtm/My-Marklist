@@ -118,7 +118,9 @@ color: #fff;
   border-radius: 4px;
   cursor: pointer;
 }
-
+.grade {
+  font-weight: bold;
+}
 /* Page break for printing */
 .page-break { page-break-after: always; break-after: page; }
 
@@ -317,7 +319,7 @@ color: #fff;
         <option>श्री. कोठावदे एस.पी.</option>
       </select>
     </label>
-    <button onclick="loadStudents()">Go</button>
+    <button class="go-btn" onclick="loadStudents()">Go</button>
   </div>
     
    <div id="tablesContainer"></div>
@@ -711,6 +713,7 @@ function clearData() {
 </body>
 
 </html>
+
 
 
 
