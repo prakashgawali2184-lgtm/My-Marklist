@@ -93,21 +93,20 @@ th.vertical svg {
 .col-num { width: 30px; }
 .col-name { width: 180px; } /* student name column */
 .small-col { width: 28px; }
-
 body {
   background-color: #e6f0ff; /* soft light blue, change as you like */
 }
- 
 .go-btn {
-  background-color: #ff8000;  /* bright orange */
-color: #fff;
+  background-color: #ff8000; 
+  color: #fff;
   padding: 6px 14px;
   border: none;
   border-radius: 4px;
   cursor: pointer;
   font-weight: bold;
 }
-   /* PDF button */
+
+/* PDF button */
 .pdf-btn {
   
   padding: 8px 16px;
@@ -121,6 +120,7 @@ color: #fff;
 .grade {
   font-weight: bold;
 }
+
 /* Page break for printing */
 .page-break { page-break-after: always; break-after: page; }
 
@@ -252,8 +252,263 @@ color: #fff;
 </style>
 </head>
 <body>
+ <!-- Hamburger Button -->
+<button id="hamburgerBtn" style="
+    position: fixed;
+    top: 20px;
+    left: 20px;
+    z-index: 1000;
+    width: 50px;
+    height: 50px;
+    border-radius: 8px;
+    background-color: #007bff;
+    color: white;
+    font-size: 24px;
+    border: none;
+    cursor: pointer;
+">☰</button>
 
-  <div class="sub header">पुणे विद्यार्थी गृहाचे</div>
+<!-- Hamburger Menu Container -->
+<div id="hamburgerMenu" style="
+    position: fixed;
+    top: 80px;       /* below the hamburger button */
+    left: 20px;
+    display: none;   /* hidden by default */
+    flex-direction: column;
+    gap: 10px;
+    z-index: 1000;
+">
+    <button id="downloadExcelBtn" style="
+        padding: 8px 16px;
+        border: none;
+        border-radius: 6px;
+        background-color: #28a745;
+        color: white;
+        cursor: pointer;
+        font-weight: bold;
+    ">⬇️ Download Excel</button>
+</div>
+<!-- with this one (xlsx-js-style, supports styling) -->
+<script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.min.js"></script>
+<script>
+const downloadExcelBtn = document.getElementById('downloadExcelBtn');
+
+downloadExcelBtn.addEventListener('click', () => {
+  const tables = Array.from(document.querySelectorAll('#tablesContainer table'));
+  if (!tables.length) {
+    alert("No tables found!");
+    return;
+  }
+
+  // Helper: get visible text from a cell (inputs, svg text, or plain text)
+  function getCellText(cell) {
+    const input = cell.querySelector('input, textarea, select');
+    if (input) return String(input.value || "").trim();
+
+    const svgText = cell.querySelector('svg text');
+    if (svgText && svgText.textContent && svgText.textContent.trim()) return svgText.textContent.trim();
+
+    return String(cell.textContent || "").replace(/\u00A0/g, ' ').trim();
+  }
+
+  const wb = XLSX.utils.book_new();
+  const sheetData = [];   // array-of-arrays for the sheet
+  const merges = [];      // merges from table cells and header rows
+  const headerRowsToMerge = []; // indices of rows that should be merged full-width (H1/H2/meta rows)
+  const headerStyleRows = new Set(); // rows that should get header styling (bold + fill)
+  let currentRow = 0;
+
+  tables.forEach((table) => {
+    // Collect preceding school-heading / table-meta / meta-row nodes (so each page keeps its heading)
+    const prev = [];
+    let p = table.previousElementSibling;
+    while (p && (p.classList.contains('table-meta') || p.classList.contains('school-heading') || p.classList.contains('meta-row'))) {
+      prev.unshift(p);
+      p = p.previousElementSibling;
+    }
+
+    // Add those lines as separate rows and mark them for full-width merge later
+    prev.forEach(node => {
+      const textLines = [];
+      if (node.classList.contains('school-heading')) {
+        const h4 = node.querySelector('h4'); if (h4 && h4.innerText.trim()) textLines.push(h4.innerText.trim());
+        const h5 = node.querySelector('h5'); if (h5 && h5.innerText.trim()) textLines.push(h5.innerText.trim());
+      } else {
+        const t = (node.innerText || "").trim();
+        if (t) textLines.push(t);
+      }
+
+      textLines.forEach(tl => {
+        if (!sheetData[currentRow]) sheetData[currentRow] = [];
+        sheetData[currentRow][0] = tl;
+        headerRowsToMerge.push(currentRow);
+        headerStyleRows.add(currentRow);
+        currentRow++;
+      });
+    });
+
+    // Determine how many header rows the table uses (thead length or fall back 1/2)
+    const headerRowCount = table.tHead ? table.tHead.rows.length : (table.rows.length >= 2 ? 2 : 1);
+
+    // Build matrix for this table, handling colspan/rowspan robustly
+    const rows = table.rows;
+    const matrix = [];
+
+    for (let r = 0; r < rows.length; r++) {
+      if (!matrix[r]) matrix[r] = [];
+      let col = 0;
+      const tr = rows[r];
+
+      for (let c = 0; c < tr.cells.length; c++) {
+        // find next free column
+        while (matrix[r][col] !== undefined) col++;
+
+        const cell = tr.cells[c];
+        const text = getCellText(cell);
+        matrix[r][col] = text;
+
+        const colspan = cell.colSpan || 1;
+        const rowspan = cell.rowSpan || 1;
+
+        // record merges for actual table cell spans (absolute rows = currentRow + r)
+        if (colspan > 1 || rowspan > 1) {
+          merges.push({
+            s: { r: currentRow + r, c: col },
+            e: { r: currentRow + r + rowspan - 1, c: col + colspan - 1 }
+          });
+        }
+
+        // placeholders for colspan in same row
+        for (let cc = 1; cc < colspan; cc++) matrix[r][col + cc] = null;
+
+        // reserve placeholders for rowspan in future rows of matrix
+        if (rowspan > 1) {
+          for (let rr = 1; rr < rowspan; rr++) {
+            if (!matrix[r + rr]) matrix[r + rr] = [];
+            for (let cc = 0; cc < colspan; cc++) {
+              matrix[r + rr][col + cc] = null;
+            }
+          }
+        }
+
+        col += colspan;
+      } // end cells loop
+
+      // Mark the table header rows (the first headerRowCount rows) for header-style
+      if (r < headerRowCount) headerStyleRows.add(currentRow + r);
+    } // end rows loop
+
+    // append matrix into global sheetData at currentRow offset
+    for (let r = 0; r < matrix.length; r++) {
+      sheetData[currentRow + r] = matrix[r];
+    }
+
+    // leave one blank row between tables (so pages stack vertically in the excel)
+    currentRow += matrix.length + 1;
+  }); // end tables.forEach
+
+  // compute maximum columns used
+  const maxCols = sheetData.reduce((m, row) => Math.max(m, (row ? row.length : 0)), 0) || 12;
+
+  // Now create full-width merges for the H1/H2/meta rows collected earlier
+  headerRowsToMerge.forEach(rowIndex => {
+    merges.push({
+      s: { r: rowIndex, c: 0 },
+      e: { r: rowIndex, c: maxCols - 1 }
+    });
+  });
+
+  // ensure every row has at least maxCols entries (so aoa_to_sheet writes a clean grid)
+  for (let r = 0; r < sheetData.length; r++) {
+    if (!sheetData[r]) sheetData[r] = [];
+    for (let c = 0; c < maxCols; c++) {
+      if (sheetData[r][c] === undefined) sheetData[r][c] = "";
+    }
+  }
+
+  // build worksheet and apply merges
+  const ws = XLSX.utils.aoa_to_sheet(sheetData);
+  if (merges.length) ws['!merges'] = merges;
+
+  // sensible column widths (first two wider)
+  ws['!cols'] = Array.from({ length: maxCols }, (_, i) => {
+    if (i === 0) return { wch: 6 };    // ह.क्र.
+    if (i === 1) return { wch: 28 };   // विद्यार्थीचे नाव
+    return { wch: 14 };                // other cols
+  });
+  // --- Set row heights (especially for headings and dropdown info) ---
+try {
+  const totalRows = sheetData.length;
+  ws['!rows'] = [];
+
+  // First 3 rows for headings
+  ws['!rows'][0] = { hpt: 35 }; // H1
+  ws['!rows'][1] = { hpt: 28 }; // H2
+  ws['!rows'][2] = { hpt: 35 }; // dropdown info
+
+  // Remaining rows
+  for (let i = 3; i < totalRows; i++) {
+    ws['!rows'][i] = { hpt: 18 };
+  }
+} catch (err) {
+  console.error("Error setting row heights:", err);
+} 
+  // --- Styling: add borders, alignment, bold header rows, center merged headings ---
+  const range = XLSX.utils.decode_range(ws['!ref'] || "A1:A1");
+  for (let R = range.s.r; R <= range.e.r; ++R) {
+    for (let C = range.s.c; C <= range.e.c; ++C) {
+      const addr = XLSX.utils.encode_cell({ r: R, c: C });
+      // ensure cell exists so style can be applied
+      if (!ws[addr]) ws[addr] = { t: 's', v: '' };
+
+      const isHeaderStyle = headerStyleRows.has(R);
+      const isNameCol = (C === 1);
+
+      const alignment = isHeaderStyle
+        ? { horizontal: "center", vertical: "center", wrapText: true }
+        : (isNameCol ? { horizontal: "left", vertical: "center", wrapText: true } : { horizontal: "center", vertical: "center", wrapText: true });
+
+      ws[addr].s = {
+        border: {
+          top:    { style: "thin", color: { rgb: "000000" } },
+          bottom: { style: "thin", color: { rgb: "000000" } },
+          left:   { style: "thin", color: { rgb: "000000" } },
+          right:  { style: "thin", color: { rgb: "000000" } }
+        },
+        alignment,
+        font: isHeaderStyle ? { bold: true, sz: 12 } : { sz: 10 },
+        ...(isHeaderStyle ? { fill: { patternType: "solid", fgColor: { rgb: "FFEFD5" } } } : {})
+      };
+    }
+  }
+
+  // append sheet and save
+  XLSX.utils.book_append_sheet(wb, ws, 'Marklist');
+
+  // hide hamburger menu after starting download
+  const hm = document.getElementById('hamburgerMenu');
+  if (hm) hm.style.display = 'none';
+
+  // write file
+  XLSX.writeFile(wb, 'Marklist.xlsx');
+
+  alert("Download successful!");
+});
+</script>
+
+
+</script>
+<script>
+  const hamburgerBtn = document.getElementById('hamburgerBtn');
+  const hamburgerMenu = document.getElementById('hamburgerMenu');
+
+  // Toggle menu visibility when hamburger button is clicked
+  hamburgerBtn.addEventListener('click', () => {
+    hamburgerMenu.style.display = 
+      (hamburgerMenu.style.display === 'flex') ? 'none' : 'flex';
+  });
+</script>
+<div class="sub header">पुणे विद्यार्थी गृहाचे</div>
   <div class="header">विद्याप्रशाला हायस्कूल व ज्युनि.कॉलेज,तळेगांव (अं.) ता.जि.नाशिक </div>
 
   <!-- Session & Year Dropdowns -->
@@ -320,6 +575,7 @@ color: #fff;
       </select>
     </label>
     <button class="go-btn" onclick="loadStudents()">Go</button>
+
   </div>
     
    <div id="tablesContainer"></div>
@@ -359,7 +615,251 @@ color: #fff;
         "पार्थ संतोष दाते","प्रेम लक्ष्मण झुरडे","रुद्र रामनाथ निंबेकर",
         "रुद्र सचिन मोरे","ऋषिकेश पांडुरंग झोले","साहिल छगन निंबेकर",
         "सोहम सुरेश"
-      ]
+      ],
+      "6-A": ["श्रेया सचिन तालखे",
+"माधुरी रमेश मुंजे",
+"भार्गवी प्रमोद गुंबाडे",
+"संजना प्रकाश शेवरे",
+"सोनाली किसान निंबेकर",
+"गौरी हरी बेंडकोळी",
+"चैताली रघुनाथ हासले",
+"प्रतिभा बंडू निंबेकर",
+"अंकिता जालंदर पाडेकर", 
+"गौरी ज्ञानेश्वर मोरे",
+"आरुषी ज्ञानेश्वर धोंगडे",
+"अक्षदा बाळू मोरे",
+"पल्लवी संपत गायकर",
+"अनुष्का रमेश दाते",
+"वेदिका गणेश पगार",
+"पूर्वा समाधान दाते",
+"स्वरा तुकाराम पगार",
+"यश सुरेश निंबेकर",
+"विजय राजेंद्र निंबेकर",
+"रुद्र कमलाकर चव्हाण",
+"श्री विकास मोरे",
+"स्वराज विष्णू कांडेकर",
+"अक्षय नवनाथ पगार",
+],
+"6-B" : ["साक्षी सुरेश खाटीकडे",
+"प्रिया माधव आचारी",
+"पल्लवी विजय आचारी",
+"दिव्या मच्छिंद्र बदादे",
+"कावेरी चांगदेव भोये",
+"स्वप्नाली भिका भोईर",
+"निकिता तानाजी हांबरे",
+"सारिका छबन निंबेकर",
+"साक्षी सुरेश निंबेकर",
+"अक्षदा नंदकिशोर निंबेकर",
+"अंकिता मोहन निंबेकर",
+"गौरी अरुण निंबेकर",
+"राणी विलास कुंभार",
+"प्राची रामदास मराडे",
+"साक्षी भाऊसाहब म्हसे",
+"ईश्वरी कैलास पोटिंदे",
+"राधिका संजय ठाकूर",
+"आर्यन तुकाराम चव्हाण",
+"साहिल समाधान आचारी",
+"लखन सुरेश बिन्नर",
+"स्वप्नील नानाजी भोईर",
+"प्रेम पाडुरंग डगळे",
+"मयन गणेश दळवी",
+"कार्तिक संदीप निंबेकर",
+"साई हरी निंबेकर",
+"प्रणव भिमा निंबेकर",
+"विवेक लक्ष्मण निंबेकर",
+"प्रसाद छगन कचरे",
+"यश समार कचरे",
+"कार्तिक योगेश पाडेकर",
+"यश आनंदा वाघ",
+"साई विनायक ससाणे",
+],
+"7-A": ["धनश्री रतन चव्हाण",
+"श्रेया बाळु चव्हाण",
+"अक्षदा जयराम डगळे",
+"गौरी खंडू बरबड़े",
+"जान्हवी समाधान बोडके",
+"अंकिता राजाराम दाते",
+"गौरी कृष्णा दाते",
+"प्रांजल बाजीराव दाते",
+"वेदिका नवनाथ दाते",
+"ईश्वरी नाना खांडबहाले",
+"ज्ञानेश्वरी बापू खांडबहाले",
+"लावण्या नामदेव पगार",
+"देवयानी शरद पगार",
+"ईश्वरी धनाजी पगार",
+"मानसी दिपक पगार",
+"ईश्वरी नितीन वडजे",
+"आनंदी जगन मोरे",
+"साईं सिताराम मोरे",
+"अंशु दत्तु गांगोडे",
+"वेदांत गोटीराम दाते",
+"पृथ्वीराज संदीप दाते",
+"पृथ्वी नवनाथ मोरे",
+"कार्तिक भाऊसाहेब मोरे",
+"सिद्धार्थ शिवराम मोरे",
+"सर्वेश योगेश मोरे",
+"कृष्णा नवनाथ मोरे",
+"राधव शांताराम पगार",
+"कार्तिक तानाजी पगार",
+"रूपेश नवनाथ पगार",
+"आयुष दौलत होण",
+"ऋषिकेश सोमनाथ मोरे",
+"आयुष हिरामन मोरे",
+"कृष्णा धोंडीराम पगार",
+"भार्गव झुंबर मोरे",
+"आराध्य विजय मोरे",
+"अभय निवृत्ती महाले",
+"विकास प्रकाश कडलग",
+"शिवम रामकुमार शर्मा",
+],
+"7-B" : ["दिव्या बबन निंबेकर",
+"गायत्री गणेश निंबेकर",
+"पूजा सोमा' निंबेकर",
+"संजीवनी विष्णू निंबेकर",
+"मोनिका नाना भोईर",
+"गौरी सोमनाथ कोरडे",
+"जयश्री हेमंत लोने",
+"नीलिमा भगवान वाघले",
+"पायल नंदू मराडे",
+"रुपाली शिवाजी हांबरे",
+"वंदना नाना वाघ",
+"कोमल दिलीप गायकवाड",
+"साक्षी हरिश्चंद्र शिद",
+"शिवानी हरी धोंगडे",
+"आशा आपा बदादे",
+"लक्ष्मी गजानन गुहाडे",
+"दिशा गणेश फडोळ",
+"पूजा गोकुळ दाते",
+"मयूर गोरख दाते",
+"अविनाश नाना कचरे",
+"साई राजेंद्र निंबेकर",
+"करण रंघनाथ भोईर",
+"पारस एकनाथ झोले",
+"प्रसाद शरद भोईर",
+"रोहित रामचंद्र कचरे",
+"कुणाल यशवंत बेंडकोळी",
+"अनिल संतोष बोरसे",
+"राम विष्णू वाघ",
+"आनंद विलास कुवर",
+"कुणाल प्रवीण कुंभार",
+],
+ "8-A" : ["गायत्री कैलास गोरे",
+"दिशा शशिकांत शिंदे",
+"प्रिती दत्तू निंबेकर",
+"तेजस्विनी कमलाकर चव्हाण",
+"स्वरा नवनाथ भालेराव",
+"दिया अशोक भालेराव",
+"अनुजा संतोष भालेराव",
+"श्रावणी हरि कोरडे",
+"कोमल शिवराम दाते",
+"गौरी दिनकर दाते",
+"आदिती ज्ञानेश्वर दाते",
+"नूतन नंदकिशोर पगार",
+"अश्विनी राजाराम पगार",
+"कादंबरी लक्ष्मण पगार",
+"आदिती दिलीप पगार",
+"स्मितल जालिंदर पगार",
+"मानसी तुकाराम पगार",
+"किर्ती संपत जोंधळे",
+"आदिती संतोष मोरे",
+"विशाल सुरेश निंबेकर",
+"आर्यन अंबादास निंबेकर",
+"साहिल शरद मुंजे",
+"मयूर मंगेश कांडेकर",
+"सार्थक सुदाम रहाडे",
+"स्वराज सुदाम भालेराव",
+"आयुष अशोक दाते",
+"आदित्य नवनाथ दाते",
+"सार्थक संतोष दाते",
+"रामहरी सुभाष खांडबहाले",
+"अभिजीत बबन मोरे",
+"आयुष बाळू मोरे",
+"साई शांताराम मोरे",
+"सौरभ रतन महाले",
+"केशव तुकाराम महाले",
+"अश्विन उमेश पगार",
+"कुणाल देविदास पगार",
+"साई अरुण पगार",
+"साई युवराज पगार",
+"यश चंद्रकांत पगार",
+"आर्यन त्रंबक थेटे",
+"गौरव भाऊसाहेब थेटे",
+],
+ "8-B" : ["खुशी राहुल शिंदे",
+"आश्विनी दिनकर भोईर",
+"नंदिनी नाना वाघ",
+"ज्योती अरुण निंबेकर",
+"प्रतिक्षा योगेश पाडेकर",
+"समिक्षा भाऊराव भोईर",
+"सह्याद्री अनिल लहांगे",
+"उज्वला रघुनाथ हसाळे",
+"वैष्णवी रवींद्र भगरे",
+"विजयालक्ष्मी संदीप निंबेकर",
+"दूर्वा अरुण भवारी",
+"खुशी समाधान आचारी",
+"चांदणी तुकाराम सदगीर",
+"देवयानी बबन ढोन्नर",
+"गायत्री योगेश बिन्नर",
+"अक्षदा रमेश दाते",
+"कार्तिकी एकनाथ महाले",
+"सार्थक बाळू चव्हाण",
+"खुशाल बळवंत निंबेकर",
+"पवन मच्छिंद्र बदोद",
+"पवन नागेश भोईर",
+"प्रशांत कमलाकर निंबेकर",
+"प्रथमेश छगन निंबेकर",
+"प्रेम गोरख निंबेकर",
+"वैभव मंगेश निंबेकर",
+"रोहित रामदास वाघ",
+"सचिन लक्ष्मण पोटिंदे",
+"संकेत राजेंद्र निंबेकर",
+"संभव संतोष कडाळे",
+"हर्षद भगवान वाघले",
+"शुभम संजय शेवरे",
+"प्रणव गणपत बुरंगे",
+"मयूर शिवराम मालक",
+"गणेश चांगदेव भोये",
+"योगेश हिरामण झुरडे",
+"कन्हैया रघुनाथ शिंदे",
+"राम सुरेश पगार",
+"सार्थक शंकर पगार",
+"आदेश विजय पगार",
+"आदित्य धनाजी दाते",
+],
+ "8-C" : ["कडलक वैशाली संजय",
+"नेटावटे अस्मिता गोकुळ",
+"कुंभार निशा विलास",
+"निंबेकर सुवर्णा अशोक",
+"निंबेकर निशा दगडू",
+"पावडे गौरी ज्ञानेश्वर",
+"पवार खुशी समाधान",
+"शिद शितल पुंडलिक",
+"ससाणे गायत्री योगेश",
+"सदगीर जयश्री बाजीराव",
+"व्हरगळ साक्षी रोहिदास",
+"कडलक केदार संदीप",
+"आचारी आदित्य विजय",
+"बोंबले मोहन श्रावण",
+"भोईर आदेश नवनाथ",
+"गारे गणेश बाळू",
+"जावळे कार्तिक भगवान",
+"कचरे सार्थक नाना",
+"कचरे सार्थक गुलाब",
+"खोडे कृष्णा सोमनाथ",
+"मराडे ओमकार निवृत्ती",
+"निंबेकर खुशाल शंकर",
+"निंबेकर विजय मधुकर",
+"निंबेकर समाधान बहिरूनाथ",
+"निंबेकर दिपक हरी",
+"ससाणे अविनाश अंकुश",
+"वाडगे सुनिल राजाराम",
+"वाघ प्रविण थोरात",
+"लक्ष्मण यश लक्ष्मण",
+"ढोन्नर कार्तिक योगेश",
+"सदगीर चेतन समाधान",
+"महाले पवन अर्जुन",
+"मोरे जनार्दन गोकुळ",
+],
     };
 
     // Table Template (keeps your format)
@@ -711,10 +1211,4 @@ function clearData() {
 
 </script>
 </body>
-
 </html>
-
-
-
-
-
